@@ -28,6 +28,7 @@ package main
 import (
 	"fmt"
 	"golang.org/x/crypto/ssh"
+	"io"
 	"log"
 	"os"
 	"os/signal"
@@ -48,7 +49,7 @@ const DEFAULT_REFRESH = 5 // default refresh interval in seconds
 
 func usage(code int) {
 	fmt.Printf(
-`rtop %s - (c) 2015 RapidLoop - MIT Licensed - http://rtop-monitor.org
+		`rtop %s - (c) 2015 RapidLoop - MIT Licensed - http://rtop-monitor.org
 rtop monitors server statistics over an ssh connection
 
 Usage: rtop [-i private-key-file] [user@]host[:port] [interval]
@@ -155,8 +156,9 @@ func main() {
 
 	client := sshConnect(username, addr, keyPath)
 
+	output := getOutput()
 	// the loop
-	showStats(client)
+	showStats(output, client)
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM, syscall.SIGQUIT)
 	timer := time.Tick(interval)
@@ -165,21 +167,26 @@ func main() {
 		select {
 		case <-sig:
 			done = true
+			fmt.Println()
 		case <-timer:
-			showStats(client)
+			showStats(output, client)
 		}
 	}
 }
 
-func showStats(client *ssh.Client) {
+func showStats(output io.Writer, client *ssh.Client) {
 	stats := Stats{}
 	getAllStats(client, &stats)
+	clearConsole()
 	used := stats.MemTotal - stats.MemFree - stats.MemBuffers - stats.MemCached
-	fmt.Printf(
-`%s%s%s%s up %s%s%s
+	fmt.Fprintf(output,
+		`%s%s%s%s up %s%s%s
 
 Load:
     %s%s %s %s%s
+
+CPU:
+    %s%.2f%s%% user, %s%.2f%s%% sys, %s%.2f%s%% nice, %s%.2f%s%% idle, %s%.2f%s%% iowait, %s%.2f%s%% hardirq, %s%.2f%s%% softirq, %s%.2f%s%% guest
 
 Processes:
     %s%s%s running of %s%s%s total
@@ -196,6 +203,14 @@ Memory:
 		escBrightWhite, stats.Hostname, escReset,
 		escBrightWhite, fmtUptime(&stats), escReset,
 		escBrightWhite, stats.Load1, stats.Load5, stats.Load10, escReset,
+		escBrightWhite, stats.CPU.User, escReset,
+		escBrightWhite, stats.CPU.System, escReset,
+		escBrightWhite, stats.CPU.Nice, escReset,
+		escBrightWhite, stats.CPU.Idle, escReset,
+		escBrightWhite, stats.CPU.Iowait, escReset,
+		escBrightWhite, stats.CPU.Irq, escReset,
+		escBrightWhite, stats.CPU.SoftIrq, escReset,
+		escBrightWhite, stats.CPU.Guest, escReset,
 		escBrightWhite, stats.RunningProcs, escReset,
 		escBrightWhite, stats.TotalProcs, escReset,
 		escBrightWhite, fmtBytes(stats.MemFree), escReset,
@@ -208,7 +223,7 @@ Memory:
 	if len(stats.FSInfos) > 0 {
 		fmt.Println("Filesystems:")
 		for _, fs := range stats.FSInfos {
-			fmt.Printf("    %s%8s%s: %s%s%s free of %s%s%s\n",
+			fmt.Fprintf(output, "    %s%8s%s: %s%s%s free of %s%s%s\n",
 				escBrightWhite, fs.MountPoint, escReset,
 				escBrightWhite, fmtBytes(fs.Free), escReset,
 				escBrightWhite, fmtBytes(fs.Used+fs.Free), escReset,
@@ -225,12 +240,12 @@ Memory:
 		sort.Strings(keys)
 		for _, intf := range keys {
 			info := stats.NetIntf[intf]
-			fmt.Printf("    %s%s%s - %s%s%s, %s%s%s\n",
+			fmt.Fprintf(output, "    %s%s%s - %s%s%s, %s%s%s\n",
 				escBrightWhite, intf, escReset,
 				escBrightWhite, info.IPv4, escReset,
 				escBrightWhite, info.IPv6, escReset,
 			)
-			fmt.Printf("      rx = %s%s%s, tx = %s%s%s\n",
+			fmt.Fprintf(output, "      rx = %s%s%s, tx = %s%s%s\n",
 				escBrightWhite, fmtBytes(info.Rx), escReset,
 				escBrightWhite, fmtBytes(info.Tx), escReset,
 			)
